@@ -1,18 +1,187 @@
-#include <Arduino.h>
+#include <Wire.h>
+#include <LiquidCrystal_I2C.h>
+#include <Keypad.h>
+#include <EEPROM.h>
 
-// put function declarations here:
-int myFunction(int, int);
+// LCD I2C (адреса 0x27, 16x2)
+LiquidCrystal_I2C lcd(0x27, 16, 2);
+
+// Клавіатура 4x4
+const byte ROWS = 4;
+const byte COLS = 4;
+
+char hexaKeys[ROWS][COLS] = {
+  {'1', '2', '3', 'A'},
+  {'4', '5', '6', 'B'},
+  {'7', '8', '9', 'C'},
+  {'*', '0', '#', 'D'}
+};
+
+byte rowPins[ROWS] = {27, 29, 31, 33};
+byte colPins[COLS] = {16, 17, 23, 25};
+
+Keypad keypad = Keypad(makeKeymap(hexaKeys), rowPins, colPins, ROWS, COLS);
+
+bool placeTaken[4] = {false, false, false, false};
+int placePins[4] = {0, 0, 0, 0};
+bool waitingForPin = false;
+int currentPlace = -1;
+String enteredPin = "";
+
+#define EEPROM_MAGIC_ADDR 100
+#define EEPROM_MAGIC_VALUE 42
+
+void saveToEEPROM() {
+  for (int i = 0; i < 4; i++) EEPROM.write(i, placeTaken[i]);
+  for (int i = 0; i < 4; i++) EEPROM.put(10 + i * 2, placePins[i]);
+}
+
+void loadFromEEPROM() {
+  for (int i = 0; i < 4; i++) placeTaken[i] = EEPROM.read(i);
+  for (int i = 0; i < 4; i++) EEPROM.get(10 + i * 2, placePins[i]);
+}
+
+void initEEPROM() {
+  if (EEPROM.read(EEPROM_MAGIC_ADDR) != EEPROM_MAGIC_VALUE) {
+    for (int i = 0; i < 4; i++) {
+      placeTaken[i] = false;
+      placePins[i] = 0;
+      EEPROM.write(i, 0);
+      EEPROM.put(10 + i * 2, 0);
+    }
+    EEPROM.write(EEPROM_MAGIC_ADDR, EEPROM_MAGIC_VALUE);
+  }
+}
+
+
+bool isPinUsed(int pin);
+
+void showFreePlaces();
+
 
 void setup() {
-  // put your setup code here, to run once:
-  int result = myFunction(2, 3);
+  randomSeed(analogRead(A0));
+  lcd.init();
+  lcd.backlight();
+  initEEPROM();
+  loadFromEEPROM();
+  showFreePlaces();
 }
 
 void loop() {
-  // put your main code here, to run repeatedly:
+  char key = keypad.getKey();
+  if (!waitingForPin) {
+    if (key == '*') {
+      waitingForPin = true;
+      currentPlace = -1;
+      enteredPin = "";
+      lcd.clear();
+      lcd.setCursor(0, 0);
+      lcd.print("Zadajte PIN:");
+      lcd.setCursor(0, 1);
+      lcd.print("____");
+    }
+    else if (key && (key >= '1' && key <= '4')) {
+      int place = key - '1';
+      if (!placeTaken[place]) {
+        int pin;
+        do {
+          pin = random(1000, 9999);
+        } while (isPinUsed(pin));
+        placePins[place] = pin;
+        placeTaken[place] = true;
+        saveToEEPROM();
+        currentPlace = place;
+        waitingForPin = false;
+        lcd.clear();
+        lcd.setCursor(0, 0);
+        lcd.print(String(place + 1) + ": " + String(pin));
+        delay(2000);
+        showFreePlaces();
+      }
+    }
+  } else {
+    // Додаємо символ до введеного PIN або спец. комбінації
+    if (key && enteredPin.length() < 4) {
+      enteredPin += key;
+      lcd.setCursor(0, 1);
+      lcd.print(enteredPin);
+      for (int i = enteredPin.length(); i < 4; i++) lcd.print("_");
+    }
+    // Якщо натиснуто # — перевіряємо
+    if (key == '#') {
+      // Якщо введено "CBAD" — показати всі PIN-и
+      if (enteredPin == "CBAD") {
+        lcd.clear();
+        lcd.setCursor(0, 0);
+        for (int i = 0; i < 2; i++) {
+          lcd.print(String(i + 1) + ":");
+          if (placeTaken[i]) lcd.print(placePins[i]);
+          else lcd.print("-");
+          lcd.print(" ");
+        }
+        lcd.setCursor(0, 1);
+        for (int i = 2; i < 4; i++) {
+          lcd.print(String(i + 1) + ":");
+          if (placeTaken[i]) lcd.print(placePins[i]);
+          else lcd.print("-");
+          lcd.print(" ");
+        }
+        delay(4000);
+        enteredPin = "";
+        waitingForPin = false;
+        showFreePlaces();
+        return;
+      }
+      // ... (далі стандартна перевірка PIN)
+      bool found = false;
+      for (int i = 0; i < 4; i++) {
+        if (placeTaken[i] && placePins[i] == enteredPin.toInt()) {
+          lcd.clear();
+          lcd.setCursor(0, 0);
+          lcd.print("Vydava sa auto " + String(i + 1));
+          delay(2000);
+          placeTaken[i] = false;
+          placePins[i] = 0;
+          saveToEEPROM();
+          found = true;
+          break;
+        }
+      }
+      if (!found && enteredPin.length() == 4) {
+        lcd.clear();
+        lcd.setCursor(0, 0);
+        lcd.print("Nespravny PIN!");
+        delay(2000);
+      }
+      enteredPin = "";
+      waitingForPin = false;
+      currentPlace = -1;
+      showFreePlaces();
+    }
+    if (key == '*') {
+      enteredPin = "";
+      lcd.setCursor(0, 1);
+      lcd.print("____");
+    }
+  }
 }
 
-// put function definitions here:
-int myFunction(int x, int y) {
-  return x + y;
+bool isPinUsed(int pin) {
+  for (int i = 0; i < 4; i++) {
+    if (placePins[i] == pin) return true;
+  }
+  return false;
+}
+
+void showFreePlaces() {
+  lcd.clear();
+  lcd.setCursor(0, 0);
+  lcd.print("Volne miesta:");
+  lcd.setCursor(0, 1);
+  for (int i = 0; i < 4; i++) {
+    if (!placeTaken[i]) lcd.print(String(i + 1));
+    else lcd.print("-");
+    if (i < 3) lcd.print("/");
+  }
 }
