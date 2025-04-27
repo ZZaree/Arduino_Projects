@@ -17,7 +17,7 @@ char hexaKeys[ROWS][COLS] = {
   {'*', '0', '#', 'D'}
 };
 
-byte rowPins[ROWS] = {27, 29, 31, 33};
+byte rowPins[ROWS] = {27, 29, 31, 33}; //піни
 byte colPins[COLS] = {16, 17, 23, 25};
 
 Keypad keypad = Keypad(makeKeymap(hexaKeys), rowPins, colPins, ROWS, COLS);
