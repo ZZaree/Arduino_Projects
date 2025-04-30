@@ -17,7 +17,7 @@ char hexaKeys[ROWS][COLS] = {
   {'*', '0', '#', 'D'}
 };
 
-byte rowPins[ROWS] = {27, 29, 31, 33}; //піни
+byte rowPins[ROWS] = {27, 29, 31, 33}; // підключення клавіш
 byte colPins[COLS] = {16, 17, 23, 25};
 
 Keypad keypad = Keypad(makeKeymap(hexaKeys), rowPins, colPins, ROWS, COLS);
@@ -28,8 +28,12 @@ bool waitingForPin = false;
 int currentPlace = -1;
 String enteredPin = "";
 
+int wrongAttempts = 0;
+bool isLocked = false;
+
 #define EEPROM_MAGIC_ADDR 100
 #define EEPROM_MAGIC_VALUE 42
+#define EEPROM_LOCKED_ADDR 120  // адреса для збереження блокування
 
 void saveToEEPROM() {
   for (int i = 0; i < 4; i++) EEPROM.write(i, placeTaken[i]);
@@ -50,14 +54,17 @@ void initEEPROM() {
       EEPROM.put(10 + i * 2, 0);
     }
     EEPROM.write(EEPROM_MAGIC_ADDR, EEPROM_MAGIC_VALUE);
+    EEPROM.write(EEPROM_LOCKED_ADDR, false); // зберігаємо isLocked = false при ініціалізації
   }
 }
 
+void setLockedState(bool locked) {
+  isLocked = locked;
+  EEPROM.write(EEPROM_LOCKED_ADDR, isLocked); // зберегти у EEPROM
+}
 
 bool isPinUsed(int pin);
-
 void showFreePlaces();
-
 
 void setup() {
   randomSeed(analogRead(A0));
@@ -65,11 +72,66 @@ void setup() {
   lcd.backlight();
   initEEPROM();
   loadFromEEPROM();
-  showFreePlaces();
+  isLocked = EEPROM.read(EEPROM_LOCKED_ADDR); // зчитати isLocked з EEPROM
+
+  if (isLocked) {
+    lcd.clear();
+    lcd.setCursor(0, 0);
+    lcd.print("PIN admina:");
+    lcd.setCursor(0, 1);
+    lcd.print("____");
+  } else {
+    showFreePlaces();
+  }
 }
 
 void loop() {
   char key = keypad.getKey();
+
+  // Якщо панель заблокована — тільки PIN admina
+  if (isLocked) {
+    if (key && enteredPin.length() < 4) {
+      enteredPin += key;
+      lcd.setCursor(0, 1);
+      lcd.print(enteredPin);
+      for (int i = enteredPin.length(); i < 4; i++) lcd.print("_");
+    }
+
+    if (key == '#') {
+      if (enteredPin == "CBAD") {
+        setLockedState(false);
+        wrongAttempts = 0;
+        lcd.clear();
+        lcd.setCursor(0, 0);
+        lcd.print("Rozblokovane!");
+        delay(2000);
+        enteredPin = "";
+        showFreePlaces();
+      } else {
+        lcd.clear();
+        lcd.setCursor(0, 0);
+        lcd.print("Panel");
+        lcd.setCursor(0, 1);
+        lcd.print("zablokovany");
+        delay(2000);
+        lcd.clear();
+        enteredPin = "";
+        lcd.setCursor(0, 0);
+        lcd.print("PIN admina:");
+        lcd.setCursor(0, 1);
+        lcd.print("____");
+      }
+    }
+
+    if (key == '*') {
+      enteredPin = "";
+      lcd.setCursor(0, 1);
+      lcd.print("____");
+    }
+
+    return;
+  }
+
   if (!waitingForPin) {
     if (key == '*') {
       waitingForPin = true;
@@ -80,8 +142,7 @@ void loop() {
       lcd.print("Zadajte PIN:");
       lcd.setCursor(0, 1);
       lcd.print("____");
-    }
-    else if (key && (key >= '1' && key <= '4')) {
+    } else if (key && (key >= '1' && key <= '4')) {
       int place = key - '1';
       if (!placeTaken[place]) {
         int pin;
@@ -101,16 +162,14 @@ void loop() {
       }
     }
   } else {
-    // Додаємо символ до введеного PIN або спец. комбінації
     if (key && enteredPin.length() < 4) {
       enteredPin += key;
       lcd.setCursor(0, 1);
       lcd.print(enteredPin);
       for (int i = enteredPin.length(); i < 4; i++) lcd.print("_");
     }
-    // Якщо натиснуто # — перевіряємо
+
     if (key == '#') {
-      // Якщо введено "CBAD" — показати всі PIN-и
       if (enteredPin == "CBAD") {
         lcd.clear();
         lcd.setCursor(0, 0);
@@ -130,10 +189,9 @@ void loop() {
         delay(4000);
         enteredPin = "";
         waitingForPin = false;
-        showFreePlaces();
         return;
       }
-      // ... (далі стандартна перевірка PIN)
+
       bool found = false;
       for (int i = 0; i < 4; i++) {
         if (placeTaken[i] && placePins[i] == enteredPin.toInt()) {
@@ -145,20 +203,37 @@ void loop() {
           placePins[i] = 0;
           saveToEEPROM();
           found = true;
+          wrongAttempts = 0;
           break;
         }
       }
+
       if (!found && enteredPin.length() == 4) {
+        wrongAttempts++;
         lcd.clear();
         lcd.setCursor(0, 0);
         lcd.print("Nespravny PIN!");
         delay(2000);
+        if (wrongAttempts >= 3) {
+          setLockedState(true);
+          lcd.clear();
+          lcd.setCursor(0, 0);
+          lcd.print("Zablokovane!");
+          delay(2000);
+          lcd.clear();
+          lcd.setCursor(0, 0);
+          lcd.print("PIN admina:");
+          lcd.setCursor(0, 1);
+          lcd.print("____");
+        }
       }
+
       enteredPin = "";
       waitingForPin = false;
       currentPlace = -1;
-      showFreePlaces();
+      if (!isLocked) showFreePlaces();
     }
+
     if (key == '*') {
       enteredPin = "";
       lcd.setCursor(0, 1);
